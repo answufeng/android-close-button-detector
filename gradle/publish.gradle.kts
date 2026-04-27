@@ -7,9 +7,12 @@ extensions.configure<org.gradle.api.publish.PublishingExtension> {
                 from(components["release"])
             }
 
-            groupId = "com.github.answufeng"
+            groupId = (findProperty("group") as String?) ?: "com.github.answufeng"
             artifactId = "android-close-button-detector"
-            version = property("VERSION_NAME")?.toString() ?: "1.0.0"
+            version =
+                (findProperty("version") as String?)
+                    ?: (findProperty("VERSION_NAME") as String?)
+                    ?: "1.0.0"
 
             pom {
                 name.set("android-close-button-detector")
