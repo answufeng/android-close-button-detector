@@ -15,6 +15,7 @@ constraintlayout = "2.2.0"
 annotation = "1.9.1"
 
 material = "1.12.0"
+litert = "1.4.1"
 
 [libraries]
 coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -34,7 +35,7 @@ annotation = { group = "androidx.annotation", name = "annotation", version.ref =
 
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
 
-tensorflow-lite = { group = "org.tensorflow", name = "tensorflow-lite", version = "2.14.0" }
+litert = { group = "com.google.ai.edge.litert", name = "litert", version.ref = "litert" }
 
 hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }
 hilt-compiler = { group = "com.google.dagger", name = "hilt-android-compiler", version.ref = "hilt" }

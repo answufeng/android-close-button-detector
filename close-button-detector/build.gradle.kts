@@ -37,7 +37,7 @@ android {
 
 dependencies {
     implementation(libs.core.ktx)
-    implementation(libs.tensorflow.lite)
+    implementation(libs.litert)
 }
 
 apply(from = rootProject.file("gradle/publish.gradle.kts"))
