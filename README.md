@@ -24,21 +24,17 @@ dependencyResolutionManagement {
 
 // app/build.gradle.kts
 dependencies {
-    implementation("com.github.answufeng:android-close-button-detector:1.0.0")
+    implementation("com.github.answufeng:android-close-button-detector:1.0.1")
 }
 ```
 
-版本号与 GitHub Release / Tag 保持一致（当前：`1.0.0`）。
+版本号与 GitHub Release / Tag 保持一致（当前：`1.0.1`）。
 
-### 2) 放入模型文件（assets）
+### 2) 模型文件（assets）
 
-本库使用 **随 AAR 一起发布的默认模型**，默认文件名固定为 `best_float32.tflite`（当前不暴露运行时替换入口）。
+本库使用 **随 AAR 一起发布的默认模型**，默认文件名为 `best_float32.tflite`（当前不暴露运行时替换入口）。
 
-你需要把模型文件放到：
-
-- `close-button-detector/src/main/assets/best_float32.tflite`
-
-如果模型文件较大，建议使用 Git LFS 管理。
+你在「使用方 App」里 **不需要** 额外放模型文件；只要正常添加依赖即可。
 
 ### 3) 最小调用（输入 Bitmap → 输出检测框）
 
@@ -144,11 +140,16 @@ detector.close()
 
 ### Q: 启动时报 `Missing TFLite model asset: best_float32.tflite`？
 
-确认模型文件已放在：
+这通常意味着打包产物里没有包含模型文件。
+
+如果你是 **库作者/在本仓库开发**，请确认模型文件存在于：
 
 - `close-button-detector/src/main/assets/best_float32.tflite`
 
-并重新编译安装（确保它被打包进最终 APK 的 `assets/`）。
+如果你是 **依赖方 App**，请先确认：
+
+- 依赖版本是否是你预期的版本（例如 `1.0.1`）
+- 是否有做 AAR/资源裁剪、或自定义打包流程导致 assets 被移除
 
 ---
 
