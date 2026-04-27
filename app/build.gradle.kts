@@ -15,6 +15,12 @@ android {
         versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Google Play (Android 15+) 16KB page size 檢查：避免把 x86/x86_64 的 native libs 打進 APK。
+        // 正式上架通常只需要 arm64-v8a（可選加 armeabi-v7a）。
+        ndk {
+            abiFilters += setOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
 
