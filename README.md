@@ -24,11 +24,11 @@ dependencyResolutionManagement {
 
 // app/build.gradle.kts
 dependencies {
-    implementation("com.github.answufeng:android-close-button-detector:1.0.1")
+    implementation("com.github.answufeng:android-close-button-detector:1.0.2")
 }
 ```
 
-版本号与 GitHub Release / Tag 保持一致（当前：`1.0.1`）。
+版本号与 GitHub Release / Tag 保持一致（当前：`1.0.2`）。
 
 ### 2) 模型文件（assets）
 
@@ -148,7 +148,7 @@ detector.close()
 
 如果你是 **依赖方 App**，请先确认：
 
-- 依赖版本是否是你预期的版本（例如 `1.0.1`）
+- 依赖版本是否是你预期的版本（例如 `1.0.2`）
 - 是否有做 AAR/资源裁剪、或自定义打包流程导致 assets 被移除
 
 ---
