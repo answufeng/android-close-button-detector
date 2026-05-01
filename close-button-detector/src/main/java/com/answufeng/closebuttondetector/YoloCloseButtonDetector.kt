@@ -34,6 +34,9 @@ internal class YoloCloseButtonDetector(
     private val preprocessMode: PreprocessMode = PreprocessMode.LETTERBOX,
     private val enableLogging: Boolean = false,
     numThreads: Int = 4,
+    private val scoreNormalization: ScoreNormalizationMode = ScoreNormalizationMode.AUTO_SIGMOID,
+    private val outputClassIds: Set<Int>? = null,
+    useNnApi: Boolean = false,
 ) : AutoCloseable {
 
     private val tag = "CloseButtonDetector"
@@ -44,6 +47,9 @@ internal class YoloCloseButtonDetector(
     private val interpreter: Interpreter
     private val inputWidth: Int
     private val inputHeight: Int
+
+    private var cachedOutputShape: IntArray? = null
+    private var cachedOutputBuffer: Array<Array<FloatArray>>? = null
 
     companion object {
         /**
@@ -62,22 +68,13 @@ internal class YoloCloseButtonDetector(
          * This library intentionally does not expose model/label overriding to avoid integration misuse.
          */
         const val DEFAULT_CLOSE_BUTTON_CLASS_ID: Int = 0
-    }
 
-    init {
-        require(this.labels.isNotEmpty()) { "labels must not be empty" }
-
-        fun findAssetPathByName(fileName: String, maxDepth: Int = 3): String? {
+        private fun findAssetPathByName(context: Context, fileName: String, maxDepth: Int = 3): String? {
             fun walk(prefix: String, depth: Int): String? {
                 val entries = runCatching { context.assets.list(prefix)?.toList().orEmpty() }.getOrDefault(emptyList())
                 if (entries.isEmpty()) return null
-
-                // Direct hit in current directory.
                 if (fileName in entries) return if (prefix.isEmpty()) fileName else "$prefix/$fileName"
-
                 if (depth >= maxDepth) return null
-
-                // Recurse into sub-directories.
                 for (entry in entries) {
                     val path = if (prefix.isEmpty()) entry else "$prefix/$entry"
                     val children = runCatching { context.assets.list(path) }.getOrNull()
@@ -88,9 +85,12 @@ internal class YoloCloseButtonDetector(
                 }
                 return null
             }
-
             return walk(prefix = "", depth = 0)
         }
+    }
+
+    init {
+        require(this.labels.isNotEmpty()) { "labels must not be empty" }
 
         val model = try {
             context.assets.openFd(modelAssetName).use { afd ->
@@ -104,7 +104,7 @@ internal class YoloCloseButtonDetector(
             }
         } catch (e: FileNotFoundException) {
             // Try locating the model file under sub-directories (e.g. assets/images/).
-            val resolved = findAssetPathByName(fileName = modelAssetName)
+            val resolved = findAssetPathByName(context, modelAssetName)
             if (resolved != null) {
                 logWarn("Model asset not found at root. Resolved '$modelAssetName' to '$resolved'.")
                 context.assets.openFd(resolved).use { afd ->
@@ -136,7 +136,12 @@ internal class YoloCloseButtonDetector(
 
         interpreter = Interpreter(
             model,
-            Interpreter.Options().apply { setNumThreads(numThreads) }
+            Interpreter.Options().apply {
+                setNumThreads(numThreads)
+                if (useNnApi) {
+                    setUseNNAPI(true)
+                }
+            }
         )
 
         val inputShape = interpreter.getInputTensor(0).shape()
@@ -153,7 +158,11 @@ internal class YoloCloseButtonDetector(
         )
     }
 
-    override fun close() = interpreter.close()
+    override fun close() {
+        cachedOutputBuffer = null
+        cachedOutputShape = null
+        interpreter.close()
+    }
 
     fun detect(bitmap: Bitmap): List<Detection> = detectInternal(bitmap)
 
@@ -166,20 +175,39 @@ internal class YoloCloseButtonDetector(
     fun hasCloseButton(bitmap: Bitmap): Boolean = detect(bitmap).isNotEmpty()
 
     private fun detectInternal(bitmap: Bitmap): List<Detection> {
-        val argbBitmap = if (bitmap.config != Bitmap.Config.ARGB_8888) {
+        require(!bitmap.isRecycled) { "Bitmap is recycled" }
+        val recycleArgb = bitmap.config != Bitmap.Config.ARGB_8888
+        val argbBitmap = if (recycleArgb) {
             bitmap.copy(Bitmap.Config.ARGB_8888, true)
         } else {
             bitmap
         }
 
         val preprocessed = preprocess(argbBitmap)
+        return try {
+            detectOnPreprocessed(preprocessed, bitmap.width, bitmap.height)
+        } finally {
+            for (b in preprocessed.recycleBitmaps) {
+                if (!b.isRecycled && b !== bitmap) b.recycle()
+            }
+            if (recycleArgb && !argbBitmap.isRecycled) {
+                argbBitmap.recycle()
+            }
+        }
+    }
+
+    private fun detectOnPreprocessed(
+        preprocessed: LetterboxedBitmap,
+        srcWidth: Int,
+        srcHeight: Int,
+    ): List<Detection> {
         val input = bitmapToFloat32Nhwc(preprocessed.bitmap)
 
         val outputShape = interpreter.getOutputTensor(0).shape()
         val layout = resolveOutputLayout(outputShape)
         logDebug("Output=${outputShape.contentToString()}, layout=$layout")
 
-        val outputBuffer = Array(outputShape[0]) { Array(outputShape[1]) { FloatArray(outputShape[2]) } }
+        val outputBuffer = obtainOutputBuffer(outputShape)
         interpreter.run(input, outputBuffer)
 
         fun valueAt(predIndex: Int, featIndex: Int): Float {
@@ -228,8 +256,8 @@ internal class YoloCloseButtonDetector(
 
             val mapped = clampRect(
                 preprocessed.mapRect(rawLeft, rawTop, rawRight, rawBottom),
-                bitmap.width,
-                bitmap.height,
+                srcWidth,
+                srcHeight,
             )
 
             candidates.add(
@@ -244,7 +272,9 @@ internal class YoloCloseButtonDetector(
 
         val finalDetections = nms(candidates, iouThreshold)
             .asSequence()
-            .filter { it.classId == closeButtonClassId }
+            .filter { d ->
+                outputClassIds?.contains(d.classId) ?: (d.classId == closeButtonClassId)
+            }
             .filter {
                 val boxWidth = it.box.width()
                 val boxHeight = it.box.height()
@@ -259,7 +289,24 @@ internal class YoloCloseButtonDetector(
 
     private fun sigmoid(x: Float): Float = 1f / (1f + kotlin.math.exp(-x))
 
-    private fun normalizeScore(raw: Float): Float = if (raw in 0f..1f) raw else sigmoid(raw)
+    private fun normalizeScore(raw: Float): Float = when (scoreNormalization) {
+        ScoreNormalizationMode.AUTO_SIGMOID -> if (raw in 0f..1f) raw else sigmoid(raw)
+        ScoreNormalizationMode.ALWAYS_SIGMOID -> sigmoid(raw)
+        ScoreNormalizationMode.RAW_CLIP -> raw.coerceIn(0f, 1f)
+    }
+
+    private fun obtainOutputBuffer(outputShape: IntArray): Array<Array<FloatArray>> {
+        if (cachedOutputShape != null &&
+            cachedOutputBuffer != null &&
+            cachedOutputShape.contentEquals(outputShape)
+        ) {
+            return cachedOutputBuffer!!
+        }
+        val buf = Array(outputShape[0]) { Array(outputShape[1]) { FloatArray(outputShape[2]) } }
+        cachedOutputShape = outputShape.copyOf()
+        cachedOutputBuffer = buf
+        return buf
+    }
 
     private data class OutputLayout(
         val channelFirst: Boolean,
@@ -275,6 +322,8 @@ internal class YoloCloseButtonDetector(
         val scaleY: Float,
         val padX: Int,
         val padY: Int,
+        /** Bitmaps allocated only for inference; caller recycles after [detectOnPreprocessed]. */
+        val recycleBitmaps: List<Bitmap> = emptyList(),
     ) {
         fun mapRect(left: Float, top: Float, right: Float, bottom: Float): RectF {
             return RectF(
@@ -337,6 +386,7 @@ internal class YoloCloseButtonDetector(
                     scaleY = inputHeight / source.height.toFloat(),
                     padX = 0,
                     padY = 0,
+                    recycleBitmaps = listOf(resized),
                 )
             }
 
@@ -361,21 +411,26 @@ internal class YoloCloseButtonDetector(
                     scaleY = scale,
                     padX = padX,
                     padY = padY,
+                    recycleBitmaps = listOf(resized, out),
                 )
             }
         }
     }
 
     private fun nms(dets: List<Detection>, iouThr: Float): List<Detection> {
-        val sorted = dets.sortedByDescending { it.score }.toMutableList()
-        val kept = mutableListOf<Detection>()
-        while (sorted.isNotEmpty()) {
-            val best = sorted.removeAt(0)
+        val sorted = dets.sortedByDescending { it.score }
+        val suppressed = BooleanArray(sorted.size)
+        val kept = ArrayList<Detection>()
+        for (i in sorted.indices) {
+            if (suppressed[i]) continue
+            val best = sorted[i]
             kept.add(best)
-            val it = sorted.iterator()
-            while (it.hasNext()) {
-                val d = it.next()
-                if (best.classId == d.classId && iou(best.box, d.box) >= iouThr) it.remove()
+            for (j in i + 1 until sorted.size) {
+                if (suppressed[j]) continue
+                val d = sorted[j]
+                if (best.classId == d.classId && iou(best.box, d.box) >= iouThr) {
+                    suppressed[j] = true
+                }
             }
         }
         return kept

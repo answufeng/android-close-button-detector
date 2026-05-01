@@ -85,7 +85,15 @@ detector.close()
 - **最佳候选策略**：
   - `BestCloseButtonStrategy.HIGHEST_SCORE`：最高分
   - `BestCloseButtonStrategy.TOP_RIGHT`：更偏右上角（更贴近“关闭按钮”常见布局）
-- **可配置**：阈值、NMS IOU、预处理方式（拉伸/letterbox）、线程数、日志开关
+- **可配置**：阈值、NMS IOU、预处理方式（拉伸/letterbox）、线程数、日志开关、`CloseButtonDetectorConfig.scoreNormalization`（`ScoreNormalizationMode`，控制 logit 映射）、`outputClassIds`（多类别输出）、`useNnApi`（NNAPI 加速，设备相关）
+- **协程**：`suspend fun detectSuspend(bitmap)` 在 `Dispatchers.Default` 上执行推理（仍须**串行**使用同一 detector 实例，与 `detect()` 相同）
+- **生命周期**：`close()` 之后再次调用 `detect*` / `hasCloseButton` 会抛出明确 `IllegalStateException`；`Bitmap.isRecycled` 会抛出 `IllegalArgumentException`
+- **内存**：推理过程会分配 letterbox/拉伸用的中间 `Bitmap`，在 `detect` 返回前由库内回收；**传入的原始 `Bitmap` 不会被 recycle**。
+
+### 模型张量约定（集成参考）
+
+- **输入**：NHWC `float32`，RGB 归一化到 `[0,1]`，空间尺寸与模型一致（库内按 assets 模型解析）。
+- **输出**：常见 `[1, numPred, numFeat]` 或 `[1, numFeat, numPred]`；`numFeat` 含框与各类别 logit（实现内自动推断 layout）。
 
 ---
 

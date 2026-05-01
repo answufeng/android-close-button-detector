@@ -38,6 +38,7 @@ android {
 dependencies {
     implementation(libs.core.ktx)
     implementation(libs.litert)
+    implementation(libs.coroutines.core)
 }
 
 apply(from = rootProject.file("gradle/publish.gradle.kts"))

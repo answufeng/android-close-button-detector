@@ -3,6 +3,8 @@ package com.answufeng.closebuttondetector
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.RectF
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Close button detector facade.
@@ -48,29 +50,68 @@ class CloseButtonDetector @JvmOverloads constructor(
         preprocessMode = config.preprocessMode,
         enableLogging = config.enableLogging,
         numThreads = config.numThreads,
+        scoreNormalization = config.scoreNormalization,
+        outputClassIds = config.outputClassIds,
+        useNnApi = config.useNnApi,
     )
+
+    @Volatile
+    private var closed: Boolean = false
+
+    private fun ensureOpen() {
+        check(!closed) {
+            "CloseButtonDetector is closed; create a new instance or stop calling detect() after close()."
+        }
+    }
+
+    private fun ensureBitmap(bitmap: Bitmap) {
+        require(!bitmap.isRecycled) { "Bitmap is recycled" }
+    }
 
     /**
      * Detect all candidate close buttons.
      *
      * @return a list of detections, sorted by descending confidence score.
      */
-    fun detect(bitmap: Bitmap): List<Detection> = engine.detect(bitmap)
+    fun detect(bitmap: Bitmap): List<Detection> {
+        ensureOpen()
+        ensureBitmap(bitmap)
+        return engine.detect(bitmap)
+    }
+
+    /**
+     * Runs [detect] on [Dispatchers.Default] so the caller thread is not blocked by TFLite inference.
+     */
+    suspend fun detectSuspend(bitmap: Bitmap): List<Detection> = withContext(Dispatchers.Default) {
+        detect(bitmap)
+    }
 
     /**
      * A convenience method that returns only bounding rectangles.
      */
-    fun detectRects(bitmap: Bitmap): List<RectF> = engine.detectRects(bitmap)
+    fun detectRects(bitmap: Bitmap): List<RectF> {
+        ensureOpen()
+        ensureBitmap(bitmap)
+        return engine.detectRects(bitmap)
+    }
 
     /**
      * Returns the highest-confidence detection, or `null` if none found.
      */
-    fun detectTopOne(bitmap: Bitmap): Detection? = engine.detectTopOne(bitmap)
+    fun detectTopOne(bitmap: Bitmap): Detection? {
+        ensureOpen()
+        ensureBitmap(bitmap)
+        return engine.detectTopOne(bitmap)
+    }
 
     /**
      * Returns the bounding rectangle of the highest-confidence detection, or `null` if none found.
      */
-    fun detectTopRect(bitmap: Bitmap): RectF? = engine.detectTopRect(bitmap)
+    fun detectTopRect(bitmap: Bitmap): RectF? {
+        ensureOpen()
+        ensureBitmap(bitmap)
+        return engine.detectTopRect(bitmap)
+    }
 
     /**
      * Pick the "best" close button candidate using a given strategy.
@@ -89,9 +130,9 @@ class CloseButtonDetector @JvmOverloads constructor(
         return when (strategy) {
             BestCloseButtonStrategy.HIGHEST_SCORE -> detections.maxByOrNull { it.score }
             BestCloseButtonStrategy.TOP_RIGHT -> detections.maxWithOrNull(
-                compareBy<Detection> { it.box.right }
-                    .thenBy { -it.box.top }
-                    .thenBy { it.score }
+                compareByDescending<Detection> { it.box.right }
+                    .thenBy { it.box.top }
+                    .thenByDescending { it.score }
             )
         }
     }
@@ -107,9 +148,15 @@ class CloseButtonDetector @JvmOverloads constructor(
     /**
      * Fast check for whether any close button was detected.
      */
-    fun hasCloseButton(bitmap: Bitmap): Boolean = engine.hasCloseButton(bitmap)
+    fun hasCloseButton(bitmap: Bitmap): Boolean {
+        ensureOpen()
+        ensureBitmap(bitmap)
+        return engine.hasCloseButton(bitmap)
+    }
 
     override fun close() {
+        if (closed) return
+        closed = true
         engine.close()
     }
 
